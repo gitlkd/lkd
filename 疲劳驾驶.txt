@@ -1,0 +1,179 @@
+import cv2
+import dlib
+import numpy as np
+from PIL import ImageFont
+from PIL import Image
+from PIL import ImageDraw
+
+cap = cv2.VideoCapture(0)
+
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("D:\shiyan\p\shape_predictor_68_face_landmarks.dat")
+
+
+# 定义一个函数来计算EAR值
+def get_ear(eye_points, facial_landmarks):
+    # 计算眼睛的高度和宽度
+    left_point = (facial_landmarks.part(eye_points[0]).x, facial_landmarks.part(eye_points[0]).y)
+    right_point = (facial_landmarks.part(eye_points[3]).x, facial_landmarks.part(eye_points[3]).y)
+    center_top = (facial_landmarks.part(eye_points[1]).x, facial_landmarks.part(eye_points[1]).y)
+    center_bottom = (facial_landmarks.part(eye_points[5]).x, facial_landmarks.part(eye_points[5]).y)
+
+    eye_width = np.linalg.norm(np.array(left_point) - np.array(right_point))
+    eye_height = np.linalg.norm(np.array(center_top) - np.array(center_bottom))
+
+    # 计算EAR值
+    ear = eye_height / eye_width
+
+    return ear
+
+# 定义一个函数来计算MAR值
+def get_mar(mouth_points, facial_landmarks):
+    # 计算嘴巴的宽度和高度
+    left_point = (facial_landmarks.part(mouth_points[0]).x, facial_landmarks.part(mouth_points[0]).y)
+    right_point = (facial_landmarks.part(mouth_points[1]).x, facial_landmarks.part(mouth_points[1]).y)
+    center_top = (facial_landmarks.part(mouth_points[2]).x, facial_landmarks.part(mouth_points[2]).y)
+    center_bottom = (facial_landmarks.part(mouth_points[3]).x, facial_landmarks.part(mouth_points[3]).y)
+
+    mouth_width = np.linalg.norm(np.array(left_point) - np.array(right_point))
+    mouth_height = np.linalg.norm(np.array(center_top) - np.array(center_bottom))
+
+    # 计算MAR值
+    mar = mouth_height / mouth_width
+
+    return mar
+
+
+# 定义左右眼的关键点索引
+left_eye_landmarks = [36, 37, 38, 39, 40, 41]
+right_eye_landmarks = [42, 43, 44, 45, 46, 47]
+
+# 定义嘴巴的关键点索引
+mouth_landmarks = [49, 55, 52, 58]
+
+# 定义一个滑动窗口来统计perclos值
+window_size = 10  # 可以根据需要调整窗口大小
+window = []  # 存储窗口内的眼睛状态，1表示闭合，0表示开启
+
+# 定义一个阈值来判断眼睛是否闭合
+eye_close_threshold = 0.2  # 可以根据需要调整阈值
+
+# 定义一个阈值来判断是否为疲劳驾驶
+perclos_threshold = 0.5  # 可以根据需要调整阈值
+
+# 定义一个阈值来判断嘴巴是否张开
+mouth_open_threshold = 1.02  # 可以根据需要调整阈值
+
+# 定义一个变量来存储上一帧的嘴巴状态，0表示闭合，1表示张开
+last_mouth_state = [0] * 30 # 把这个列表放在循环外面初始化，可以根据需要调整列表的长度
+
+while True:
+    _, frame = cap.read()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # 对图像进行高斯滤波和直方图均衡化
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray = cv2.equalizeHist(gray)
+
+    faces = detector(gray)
+
+    for face in faces:
+        x1 = face.left()
+        y1 = face
+        x2 = face.right()
+        y2 = face.bottom()
+
+        landmarks = predictor(gray, face)
+
+        # 计算左右眼的EAR值
+        left_eye_ear = get_ear(left_eye_landmarks, landmarks)
+        right_eye_ear = get_ear(right_eye_landmarks, landmarks)
+
+        # 计算平均的EAR值
+        ear = (left_eye_ear + right_eye_ear) / 2
+
+        # 判断眼睛是否闭合，并更新窗口内的状态
+        if ear < eye_close_threshold:
+            eye_state = 1  # 眼睛闭合
+        else:
+            eye_state = 0  # 眼睛开启
+
+        window.append(eye_state)
+
+        # 如果窗口满了，就计算perclos值，并判断是否为疲劳驾驶
+        if len(window) == window_size:
+            perclos = sum(window) / window_size  # perclos为窗口内眼睛闭合的时间比例
+            if perclos > perclos_threshold:
+                fatigue_state = "疲劳驾驶"  # 疲劳驾驶
+            else:
+                fatigue_state = "正常驾驶"  # 正常驾驶
+
+                # 在图像上显示perclos值和疲劳状态
+                cv2.putText(frame, "PERCLOS: {:.2f}".format(perclos), (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                            (0, 255, 0), 2)
+                font = cv2.FONT_HERSHEY_COMPLEX
+                font_path = "simhei.ttf"  # 这里你可以用其他的中文字体文件
+                font = ImageFont.truetype(font_path, 32)  # 这里你可以调整字体大小
+                # cv2.putText(frame, "疲劳状态: {}".format(fatigue_state), (20, 80), font, 1,(0, 255, 0), 2) # 这一行要注释掉或者删除
+                # 这里要用PIL库来把OpenCV的图像转换成PIL的图像，然后用PIL的方法来写中文
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # 转换颜色空间
+                draw = ImageDraw.Draw(pil_img)  # 创建一个画笔对象
+                draw.text((20, 80), "驾驶状态: {}".format(fatigue_state), font=font, fill=(0, 255, 0))  # 在图像上写中文
+                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)  # 把PIL的图像转换回OpenCV的图像
+
+            # 如果检测到疲劳驾驶，就发出警报声音
+            if fatigue_state == "疲劳驾驶":
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_path = "simhei.ttf"  # 这里你可以用其他的中文字体文件
+                font = ImageFont.truetype(font_path,55 )  # 这里你可以调整字体大小
+                # cv2.putText(frame, "快醒醒！", (200, 200), font, 3, (0, 0, 255), 5) # 这一行要注释掉或者删除
+                # 这里要用PIL库来把OpenCV的图像转换成PIL的图像，然后用PIL的方法来写中文
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # 转换颜色空间
+                draw = ImageDraw.Draw(pil_img)  # 创建一个画笔对象
+                draw.text((200, 200), "快醒醒！", font=font, fill=(255, 0, 0))  # 在图像上写中文
+                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)  # 把PIL的图像转换回OpenCV的图像
+                # 这里可以添加一个播放声音文件的函数，比如使用playsound模块
+            # 移除窗口内的第一个状态，为下一帧做准备
+            window.pop(0)
+
+            # 在每一帧上画出人脸和眼睛和嘴巴的关键点
+        for n in range(0, 68):
+            x = landmarks.part(n).x
+            y = landmarks.part(n).y
+            cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+
+        # 计算嘴巴的MAR值
+        mouth_mar = get_mar(mouth_landmarks, landmarks)
+        print("mouth_mar:", mouth_mar)
+        # 判断嘴巴是否张开，并记录当前帧的嘴巴状态
+        if mouth_mar > mouth_open_threshold:
+            mouth_state = 1  # 嘴巴张开
+        else:
+            mouth_state = 0  # 嘴巴闭合
+        # 如果当前帧的嘴巴状态和最近几帧的平均状态不同，就显示或者隐藏提醒
+        if mouth_state != sum(last_mouth_state) / len(last_mouth_state):
+            if mouth_state == 1:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_path = "simhei.ttf"  # 这里你可以用其他的中文字体文件
+                font = ImageFont.truetype(font_path, 50)  # 这里你可以调整字体大小
+                # cv2.putText(frame, "打哈欠！", (20, 120), font, 1, (0, 255, 0), 2) # 这一行要注释掉或者删除
+                # 这里要用PIL库来把OpenCV的图像转换成PIL的图像，然后用PIL的方法来写中文
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))  # 转换颜色空间
+                draw = ImageDraw.Draw(pil_img)  # 创建一个画笔对象
+                draw.text((20, 120), "打哈欠！", font=font, fill=(255, 5, 5))  # 在图像上写中文
+                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)  # 把PIL的图像转换回OpenCV的图像
+            else:
+                cv2.putText(frame, " ", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)  # 这里用空白文本覆盖提醒
+
+        # 更新最近几帧的嘴巴状态
+        last_mouth_state.pop(0)  # 移除最早的一帧
+        last_mouth_state.append(mouth_state)  # 添加当前帧
+
+    cv2.imshow("Frame", frame)
+
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
